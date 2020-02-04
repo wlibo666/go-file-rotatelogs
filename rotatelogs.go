@@ -10,12 +10,18 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	strftime "github.com/lestrrat/go-strftime"
 	"github.com/pkg/errors"
+	strftime "github.com/wlibo666/go-strftime"
+)
+
+const (
+	minFileSize   = 1024 * 1024
+	checkInterval = 60
 )
 
 func (c clockFn) Now() time.Time {
@@ -98,6 +104,14 @@ func WithRotationCount(n int) Option {
 	})
 }
 
+func WithMaxFileSize(maxSize int64) Option {
+	return OptionFn(func(rl *RotateLogs) error {
+		rl.maxFileSize = maxSize
+		rl.lastCheckTime = time.Now().Unix()
+		return nil
+	})
+}
+
 // New creates a new RotateLogs object. A log filename pattern
 // must be passed. Optional `Option` parameters may be passed
 func New(pattern string, options ...Option) (*RotateLogs, error) {
@@ -126,11 +140,48 @@ func New(pattern string, options ...Option) (*RotateLogs, error) {
 	return &rl, nil
 }
 
+func (rl *RotateLogs) genFileNameWithSizeLimit(fileName string) string {
+	now := time.Now()
+	rl.lastCheckTime = now.Unix()
+	info, err := os.Stat(fileName)
+	if err != nil {
+		return fileName
+	}
+	if info.Size() < rl.maxFileSize {
+		return fileName
+	}
+
+	// 生成新文件名称
+	tmpFile := ""
+	sp := strings.Split(fileName, ".")
+	timeSuffix := sp[len(sp)-1]
+	if len(timeSuffix) != 6 {
+		tmpFile = fileName
+	} else {
+		_, err := strconv.Atoi(timeSuffix)
+		if err != nil {
+			tmpFile = fileName
+		} else {
+			tmpFile = strings.Join(sp[:len(sp)-1], ".")
+		}
+	}
+	return fmt.Sprintf("%s.%02d%02d%02d", tmpFile, now.Hour(), now.Minute(), now.Second())
+}
+
 func (rl *RotateLogs) genFilename() string {
 	now := rl.clock.Now()
 	diff := time.Duration(now.UnixNano()) % rl.rotationTime
 	t := now.Add(time.Duration(-1 * diff))
-	return rl.pattern.FormatString(t)
+
+	tmpFileName := rl.pattern.FormatString(t)
+
+	if rl.maxFileSize <= minFileSize {
+		return tmpFileName
+	}
+	if time.Now().Unix()-rl.lastCheckTime < checkInterval {
+		return tmpFileName
+	}
+	return rl.genFileNameWithSizeLimit(tmpFileName)
 }
 
 // Write satisfies the io.Writer interface. It writes to the

@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/jonboulle/clockwork"
-	rotatelogs "github.com/lestrrat/go-file-rotatelogs"
 	"github.com/stretchr/testify/assert"
+	rotatelogs "github.com/wlibo666/go-file-rotatelogs"
 )
 
 func TestSatisfiesIOWriter(t *testing.T) {
@@ -45,6 +45,7 @@ func TestLogRotate(t *testing.T) {
 		rotatelogs.WithMaxAge(24*time.Hour),
 		rotatelogs.WithLinkName(linkName),
 	)
+
 	if !assert.NoError(t, err, `rotatelogs.New should succeed`) {
 		return
 	}
@@ -64,6 +65,7 @@ func TestLogRotate(t *testing.T) {
 	if fn == "" {
 		t.Errorf("Could not get filename %s", fn)
 	}
+	t.Logf("current file name 1:%s", fn)
 
 	content, err := ioutil.ReadFile(fn)
 	if err != nil {

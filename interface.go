@@ -5,13 +5,15 @@ import (
 	"sync"
 	"time"
 
-	strftime "github.com/lestrrat/go-strftime"
+	strftime "github.com/wlibo666/go-strftime"
 )
 
 // RotateLogs represents a log file that gets
 // automatically rotated as you write to it.
 type RotateLogs struct {
 	clock         Clock
+	maxFileSize   int64
+	lastCheckTime int64
 	curFn         string
 	globPattern   string
 	linkName      string
