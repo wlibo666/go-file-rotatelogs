@@ -12,7 +12,8 @@ import (
 // automatically rotated as you write to it.
 type RotateLogs struct {
 	clock         Clock
-	maxFileSize   int64
+	diff          int   // 按时间切分时区，比如按照东八区时间 diff = 8
+	maxFileSize   int64 // 按文件大小切分和按时间切分不能同时存在
 	lastCheckTime int64
 	curFn         string
 	globPattern   string

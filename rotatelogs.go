@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -82,6 +83,14 @@ func WithMaxAge(d time.Duration) Option {
 	})
 }
 
+// 可以指定按那个时区切分文件
+func WithZone(zone int) Option {
+	return OptionFn(func(rl *RotateLogs) error {
+		rl.diff = zone
+		return nil
+	})
+}
+
 // WithRotationTime creates a new Option that sets the
 // time between rotation.
 func WithRotationTime(d time.Duration) Option {
@@ -104,12 +113,19 @@ func WithRotationCount(n int) Option {
 	})
 }
 
+// 指定单个文件大小限制
 func WithMaxFileSize(maxSize int64) Option {
 	return OptionFn(func(rl *RotateLogs) error {
 		rl.maxFileSize = maxSize
 		rl.lastCheckTime = time.Now().Unix()
 		return nil
 	})
+}
+
+func (rl *RotateLogs) check() {
+	if rl.maxFileSize > 0 {
+		rl.linkName = ""
+	}
 }
 
 // New creates a new RotateLogs object. A log filename pattern
@@ -136,8 +152,45 @@ func New(pattern string, options ...Option) (*RotateLogs, error) {
 	for _, opt := range options {
 		opt.Configure(&rl)
 	}
-
+	rl.check()
 	return &rl, nil
+}
+
+func removeOldFile(fileName string, maxAge int64) error {
+	// 加文件锁
+	lockfn := fileName + `_lock`
+	fh, err := os.OpenFile(lockfn, os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		// Can't lock, just return
+		return err
+	}
+
+	var guard cleanupGuard
+	guard.fn = func() {
+		fh.Close()
+		os.Remove(lockfn)
+	}
+	defer guard.Run()
+
+	// 遍历文件夹，删除过期文件
+	basePath := path.Dir(fileName)
+	if basePath == fileName {
+		basePath = "./"
+	}
+
+	filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
+		if strings.Contains(path, fileName) && time.Now().UnixNano()-info.ModTime().UnixNano() > maxAge {
+			os.Remove(path)
+		}
+		return nil
+	})
+	return nil
+}
+
+func genNameByTime(file string) string {
+	now := time.Now()
+	return fmt.Sprintf("%s.%04d%02d%02d%02d%02d%02d", file, now.Year(), now.Month(), now.Day(),
+		now.Hour(), now.Minute(), now.Second())
 }
 
 func (rl *RotateLogs) genFileNameWithSizeLimit(fileName string) string {
@@ -145,7 +198,7 @@ func (rl *RotateLogs) genFileNameWithSizeLimit(fileName string) string {
 	rl.lastCheckTime = now.Unix()
 	info, err := os.Stat(fileName)
 	if err != nil {
-		return fileName
+		return genNameByTime(fileName)
 	}
 	if info.Size() < rl.maxFileSize {
 		return fileName
@@ -155,7 +208,8 @@ func (rl *RotateLogs) genFileNameWithSizeLimit(fileName string) string {
 	tmpFile := ""
 	sp := strings.Split(fileName, ".")
 	timeSuffix := sp[len(sp)-1]
-	if len(timeSuffix) != 6 {
+	// 时间后缀长度为14： 年4 月2 日2 时2 分2 秒2
+	if len(timeSuffix) != 14 {
 		tmpFile = fileName
 	} else {
 		_, err := strconv.Atoi(timeSuffix)
@@ -165,23 +219,32 @@ func (rl *RotateLogs) genFileNameWithSizeLimit(fileName string) string {
 			tmpFile = strings.Join(sp[:len(sp)-1], ".")
 		}
 	}
-	return fmt.Sprintf("%s.%02d%02d%02d", tmpFile, now.Hour(), now.Minute(), now.Second())
+	go removeOldFile(tmpFile, int64(rl.maxAge))
+
+	return genNameByTime(tmpFile)
 }
 
 func (rl *RotateLogs) genFilename() string {
 	now := rl.clock.Now()
 	diff := time.Duration(now.UnixNano()) % rl.rotationTime
+	if rl.diff != 0 {
+		diff += time.Duration(rl.diff) * time.Hour
+	}
 	t := now.Add(time.Duration(-1 * diff))
-
+	// 没有设定最大文件大小，按时间切分
 	tmpFileName := rl.pattern.FormatString(t)
+	if rl.maxFileSize < 0 {
+		return tmpFileName
+	}
 
-	if rl.maxFileSize <= minFileSize {
-		return tmpFileName
-	}
+	// 按文件切分，但每分钟只检测一次，尚未到下一次检测时间
 	if time.Now().Unix()-rl.lastCheckTime < checkInterval {
-		return tmpFileName
+		if rl.curFn == "" {
+			return genNameByTime(tmpFileName)
+		}
+		return rl.curFn
 	}
-	return rl.genFileNameWithSizeLimit(tmpFileName)
+	return rl.genFileNameWithSizeLimit(rl.curFn)
 }
 
 // Write satisfies the io.Writer interface. It writes to the
@@ -216,13 +279,14 @@ func (rl *RotateLogs) getTargetWriter() (io.Writer, error) {
 	if err != nil {
 		return nil, errors.Errorf("failed to open file %s: %s", rl.pattern, err)
 	}
-
-	if err := rl.rotate(filename); err != nil {
-		// Failure to rotate is a problem, but it's really not a great
-		// idea to stop your application just because you couldn't rename
-		// your log. For now, we're just going to punt it and write to
-		// os.Stderr
-		fmt.Fprintf(os.Stderr, "failed to rotate: %s\n", err)
+	if rl.maxFileSize <= 0 {
+		if err := rl.rotate(filename); err != nil {
+			// Failure to rotate is a problem, but it's really not a great
+			// idea to stop your application just because you couldn't rename
+			// your log. For now, we're just going to punt it and write to
+			// os.Stderr
+			fmt.Fprintf(os.Stderr, "failed to rotate: %s\n", err)
+		}
 	}
 
 	rl.outFh.Close()
