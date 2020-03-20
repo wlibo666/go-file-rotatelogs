@@ -233,7 +233,7 @@ func (rl *RotateLogs) genFilename() string {
 	t := now.Add(time.Duration(-1 * diff))
 	// 没有设定最大文件大小，按时间切分
 	tmpFileName := rl.pattern.FormatString(t)
-	if rl.maxFileSize < 0 {
+	if rl.maxFileSize <= 0 {
 		return tmpFileName
 	}
 
