@@ -228,7 +228,7 @@ func (rl *RotateLogs) genFilename() string {
 	now := rl.clock.Now()
 	diff := time.Duration(now.UnixNano()) % rl.rotationTime
 	if rl.diff != 0 {
-		diff += time.Duration(rl.diff) * time.Hour
+		diff -= time.Duration(24-rl.diff) * time.Hour
 	}
 	t := now.Add(time.Duration(-1 * diff))
 	// 没有设定最大文件大小，按时间切分
