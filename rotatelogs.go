@@ -225,12 +225,19 @@ func (rl *RotateLogs) genFileNameWithSizeLimit(fileName string) string {
 }
 
 func (rl *RotateLogs) genFilename() string {
+	var t time.Time
 	now := rl.clock.Now()
-	diff := time.Duration(now.UnixNano()) % rl.rotationTime
-	if rl.diff != 0 {
-		diff -= time.Duration(24-rl.diff) * time.Hour
+
+	if rl.rotationTime == 24*time.Hour {
+		if now.Hour() >= rl.diff {
+			t = now.Add(-1 * time.Duration(now.Hour()-rl.diff) * time.Hour)
+		} else {
+			t = now.Add(time.Duration(rl.diff-now.Hour()) * time.Hour)
+		}
+	} else {
+		diff := time.Duration(now.UnixNano()) % rl.rotationTime
+		t = now.Add(time.Duration(-1 * diff))
 	}
-	t := now.Add(time.Duration(-1 * diff))
 	// 没有设定最大文件大小，按时间切分
 	tmpFileName := rl.pattern.FormatString(t)
 	if rl.maxFileSize <= 0 {
